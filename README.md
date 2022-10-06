@@ -526,7 +526,7 @@ When we stage our payloads we want them to be accessible when we want to retriev
 
 In particular we will illustrate three different techniques that you can implement to control when your payload is to be made visible. Each of these techniques leverage information that's normally transmitted between a web client and web server during a simple _GET_ request.
 
-The first method we'll introduce is restricting access to our payload based on the IP address of the web client that our web page is able to extract from the _GET_ request. Lets take a look at how to accomplish this. Our code consists of a function called _callerIp_ that takes in a single parameter called _$caller_ which we'll use to pass the value of the IP address that we want to find. 
+The first method we'll introduce is restricting access to our payload based on the IP address of the web client that our web page is able to extract from the _GET_ request. Let's take a look at how to accomplish this. Our code consists of a function called _callerIp_ that takes in a single parameter called _$caller_ which we'll use to pass the value of the IP address that we want to find. 
 
 Our function then looks to see if an IP address has been stored in one of three values within the global variable _$_SERVER_, which is automatically set when a client communicates with our page. The first two values, _HTTP_CLIENT_IP_ and _HTTP_X_FORWARDED_FOR_ are spoofable headers that are typically set when the request comes from a proxy server, which we are including here intentionally. The third value, _REMOTE_ADDR_ is the address retrieved during the TCP handshake between the client and server. 
 
@@ -564,7 +564,7 @@ if ($ip) {
 }
 ```
 
-Keep in mind that the IP address doesn't necessarily need to be legit, we just want to be able to retrieve any IP address that can discovered in the headers provided previously. If we don't pass a spoofed IP address in the first two headers, then it'll simply retrieve the IP address of the client that interacted with the server. 
+Keep in mind that the IP address doesn't necessarily need to be legit, we just want to be able to retrieve any IP address that can be discovered in the headers provided previously. If we don't pass a spoofed IP address in the first two headers, then it'll simply retrieve the IP address of the client that interacted with the server. 
 
 We'll save our complete code into our `payload.php` file. 
 
@@ -1191,5 +1191,5 @@ While it does add a bit of complexity, we now have a better idea on what it take
 
 ### Wrapping Up
 
-We have gone through the process of hosting a PHP web page on Kali Linux and how we can use it to stage payloads that are hidden behind a wall of conditional access requirements. We also briefly touched on the concept of decoy content. Keep your eye out for the final post in this series where we'll illustrate the use of TCP sockets to host and deliver staged payloads, but not without 
+We have gone through the process of hosting a PHP web page on Kali Linux and how we can use it to stage payloads that are hidden behind a wall of conditional access requirements. We also briefly touched on the concept of decoy content. Keep your eye out for the final post in this series where we'll illustrate the use of TCP sockets to host and deliver staged payloads.
 
