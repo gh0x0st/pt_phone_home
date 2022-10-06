@@ -7,6 +7,7 @@ The concept of a staged payload is very useful and can be incorporated into vari
 What I'm looking to impart unto you are techniques you can employ to create your own methods to deliver staged payloads, right from Kali Linux. We will kick this off by demonstrating how you can accomplish this through DNS.
 
 * Part 1 - [DNS Smuggling](#dns-smuggling)
+* Part 2 - [PHP Web Pages](#php-web-pages)
 
 ## DNS Smuggling
 
